@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 import base64
@@ -97,8 +97,13 @@ def get_face_analyzer() -> FaceAnalysis:
 
     with face_analyzer_lock:
         if face_analyzer is None:
-            logger.info("Loading InsightFace model '%s' with CPU provider", MODEL_NAME)
-            analyzer = FaceAnalysis(name=MODEL_NAME, providers=["CPUExecutionProvider"])
+            logger.info("Loading InsightFace model '%s' with CPU provider, restricting modules", MODEL_NAME)
+            # Only load the modules we actually need for attendance
+            analyzer = FaceAnalysis(
+                name=MODEL_NAME, 
+                allowed_modules=['detection', 'recognition', 'landmark_2d_10g'],
+                providers=["CPUExecutionProvider"]
+            )
             analyzer.prepare(ctx_id=-1, det_size=(DETECTION_SIZE, DETECTION_SIZE))
             face_analyzer = analyzer
 
