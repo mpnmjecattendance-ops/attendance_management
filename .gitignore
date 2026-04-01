@@ -1,0 +1,33 @@
+# Node
+node_modules/
+frontend/node_modules/
+backend/node_modules/
+frontend/dist/
+
+# Python
+venv/
+.venv/
+ai-service/venv/
+ai-service/.venv312/
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+logs/
+backend/logs/
+ai-service/logs/
+
+# Local environment files
+.env
+.env.local
+.env.production
+.env.development
+backend/.env
+frontend/.env
+frontend/.env.local
+frontend/.env.production
+ai-service/.env
+
+# Editor
+.vscode/
