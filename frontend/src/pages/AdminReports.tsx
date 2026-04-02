@@ -19,38 +19,6 @@ const defaultFilters = {
   toDate: getTodayDateString()
 };
 
-const getPeriodMessage = (period: string) => {
-  const normalized = (period || '').toLowerCase();
-  if (normalized === 'morning') return { english: ' during the morning session', tamil: ' ???? ?????????' };
-  if (normalized === 'evening') return { english: ' during the evening session', tamil: ' ???? ?????????' };
-  return { english: '', tamil: '' };
-};
-
-const formatAlertDate = (timestamp?: string | null) => {
-  if (!timestamp) return 'today';
-
-  const parsed = new Date(timestamp);
-  if (Number.isNaN(parsed.getTime())) return 'today';
-
-  return `on ${parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}`;
-};
-
-const buildParentAlertMessage = (studentName: string, status: string, period: string, timestamp?: string | null) => {
-  const periodMessage = getPeriodMessage(period);
-  const dateMessage = formatAlertDate(timestamp);
-  if (status.toLowerCase() === 'absent') {
-    return [
-      `Attendance Alert: ${studentName} was absent for college ${dateMessage}${periodMessage.english}. Please check.`,
-      `????? ??????????: ${studentName} ????? ??????????? ????????${periodMessage.tamil}. ?????????? ???????????.`
-    ].join('\n');
-  }
-
-  return [
-    `Attendance Alert: ${studentName} was marked ${status.toLowerCase()} for college ${dateMessage}${periodMessage.english}. Please check.`,
-    `????? ??????????: ${studentName} ????? ??????????? ${status === 'Late' ? '??????? ???????????' : '????? ???????? ??????? ??????'}${periodMessage.tamil}. ?????????? ???????????.`
-  ].join('\n');
-};
-
 const formatSource = (source?: string | null) => !source ? 'Legacy' : source.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
 const formatConfidence = (value?: number | null) => value === null || value === undefined || Number.isNaN(Number(value)) ? '—' : `${(Number(value) * 100).toFixed(1)}%`;
 const getExportFileName = (filters: typeof defaultFilters) => `attendance-report-${filters.fromDate || 'all'}-to-${filters.toDate || 'all'}.xlsx`;
@@ -170,7 +138,9 @@ const AdminReports: React.FC = () => {
     try {
       const res = await api.post('/notifications/send', {
         studentId: record.student_id,
-        message: buildParentAlertMessage(studentName, record.status, record.period || 'attendance', record.timestamp),
+        status: record.status,
+        period: record.period || 'attendance',
+        attendanceDate: record.timestamp,
         type: 'SMS'
       });
       setStatus(res.data?.message || `SMS alert sent to parent of ${studentName}.`);
