@@ -1,7 +1,7 @@
 # Root Dockerfile for Hugging Face
 FROM python:3.12-slim
 
-# Install system dependencies for OpenCV and InsightFace
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Upgrade pip and install build tools (required for insightface/Cython)
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel Cython
 
 # Copy requirements from the subfolder
 COPY ai-service/requirements.txt .
