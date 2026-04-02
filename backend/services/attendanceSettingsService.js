@@ -81,6 +81,61 @@ export const hydrateAttendanceSettings = (row = {}) => ({
     review_expiry_minutes: Number(row.review_expiry_minutes ?? DEFAULT_ATTENDANCE_SETTINGS.review_expiry_minutes)
 });
 
+const ensureFiniteNumber = (value, fieldName) => {
+    const parsed = Number(value);
+
+    if (!Number.isFinite(parsed)) {
+        throw new Error(`${fieldName} must be a valid number.`);
+    }
+
+    return parsed;
+};
+
+const ensureIntegerInRange = (value, fieldName, min, max) => {
+    const parsed = ensureFiniteNumber(value, fieldName);
+
+    if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+        throw new Error(`${fieldName} must be an integer between ${min} and ${max}.`);
+    }
+
+    return parsed;
+};
+
+const ensureDecimalInRange = (value, fieldName, min, max) => {
+    const parsed = ensureFiniteNumber(value, fieldName);
+
+    if (parsed < min || parsed > max) {
+        throw new Error(`${fieldName} must be between ${min} and ${max}.`);
+    }
+
+    return parsed;
+};
+
+const validateAttendanceSettings = (settings) => {
+    for (const { period, startField, endField } of ATTENDANCE_PERIODS) {
+        if (toMinutes(settings[startField]) >= toMinutes(settings[endField])) {
+            throw new Error(`${period} start time must be earlier than ${period} end time.`);
+        }
+    }
+
+    if (toMinutes(settings.morning_end) > toMinutes(settings.evening_start)) {
+        throw new Error('Morning attendance must end before the evening window starts.');
+    }
+
+    settings.auto_accept_threshold = ensureDecimalInRange(settings.auto_accept_threshold, 'Auto-accept threshold', 0, 1);
+    settings.review_threshold = ensureDecimalInRange(settings.review_threshold, 'Review threshold', 0, 1);
+
+    if (settings.review_threshold >= settings.auto_accept_threshold) {
+        throw new Error('Review threshold must be lower than the auto-accept threshold.');
+    }
+
+    settings.consensus_frames = ensureIntegerInRange(settings.consensus_frames, 'Consensus frames', 1, 10);
+    settings.cooldown_seconds = ensureIntegerInRange(settings.cooldown_seconds, 'Cooldown seconds', 1, 300);
+    settings.review_expiry_minutes = ensureIntegerInRange(settings.review_expiry_minutes, 'Review expiry minutes', 1, 1440);
+
+    return settings;
+};
+
 let settingsCache = {
     data: null,
     timestamp: 0
@@ -118,10 +173,10 @@ export const getAttendanceSettings = async () => {
 };
 
 export const upsertAttendanceSettings = async (payload) => {
-    const normalizedPayload = hydrateAttendanceSettings({
+    const normalizedPayload = validateAttendanceSettings(hydrateAttendanceSettings({
         ...payload,
         id: DEFAULT_ATTENDANCE_SETTINGS.id
-    });
+    }));
 
     const { data, error } = await supabase
         .from('attendance_settings')
@@ -137,7 +192,13 @@ export const upsertAttendanceSettings = async (payload) => {
         throw new Error(error.message);
     }
 
-    return hydrateAttendanceSettings(data);
+    const result = hydrateAttendanceSettings(data);
+    settingsCache = {
+        data: result,
+        timestamp: Date.now()
+    };
+
+    return result;
 };
 
 export const getAttendanceWindow = (settings, now = new Date()) => {

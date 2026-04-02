@@ -49,6 +49,24 @@ const upsertHoliday = (items: HolidayItem[], nextHoliday: HolidayItem) => sortHo
     nextHoliday
 ]);
 
+const mapIncomingSettings = (incoming: Partial<AttendanceSettings> & {
+    morning_start?: string;
+    morning_end?: string;
+    evening_start?: string;
+    evening_end?: string;
+}) => ({
+    morning_start: incoming.morning_start?.slice(0, 5) || defaultSettings.morning_start,
+    morning_end: incoming.morning_end?.slice(0, 5) || defaultSettings.morning_end,
+    evening_start: incoming.evening_start?.slice(0, 5) || defaultSettings.evening_start,
+    evening_end: incoming.evening_end?.slice(0, 5) || defaultSettings.evening_end,
+    auto_mark_absent: Boolean(incoming.auto_mark_absent),
+    auto_accept_threshold: Number(incoming.auto_accept_threshold ?? defaultSettings.auto_accept_threshold),
+    review_threshold: Number(incoming.review_threshold ?? defaultSettings.review_threshold),
+    consensus_frames: Number(incoming.consensus_frames ?? defaultSettings.consensus_frames),
+    cooldown_seconds: Number(incoming.cooldown_seconds ?? defaultSettings.cooldown_seconds),
+    review_expiry_minutes: Number(incoming.review_expiry_minutes ?? defaultSettings.review_expiry_minutes)
+});
+
 const AdminSettings: React.FC = () => {
     const [settings, setSettings] = useState<AttendanceSettings>(defaultSettings);
     const [holidays, setHolidays] = useState<HolidayItem[]>([]);
@@ -74,6 +92,22 @@ const AdminSettings: React.FC = () => {
         return '';
     }, [settings]);
 
+    const scheduleHealth = useMemo(() => {
+        if (settings.morning_start >= settings.morning_end) {
+            return 'Morning start time must be earlier than morning end time.';
+        }
+
+        if (settings.evening_start >= settings.evening_end) {
+            return 'Evening start time must be earlier than evening end time.';
+        }
+
+        if (settings.morning_end > settings.evening_start) {
+            return 'Morning attendance should end before the evening window begins.';
+        }
+
+        return '';
+    }, [settings]);
+
     useEffect(() => {
         const loadPage = async () => {
             setLoading(true);
@@ -90,19 +124,7 @@ const AdminSettings: React.FC = () => {
     const fetchSettings = async () => {
         try {
             const res = await api.get('/settings/attendance');
-            const incoming = res.data.settings;
-            setSettings({
-                morning_start: incoming.morning_start.slice(0, 5),
-                morning_end: incoming.morning_end.slice(0, 5),
-                evening_start: incoming.evening_start.slice(0, 5),
-                evening_end: incoming.evening_end.slice(0, 5),
-                auto_mark_absent: Boolean(incoming.auto_mark_absent),
-                auto_accept_threshold: Number(incoming.auto_accept_threshold ?? 0.72),
-                review_threshold: Number(incoming.review_threshold ?? 0.58),
-                consensus_frames: Number(incoming.consensus_frames ?? 3),
-                cooldown_seconds: Number(incoming.cooldown_seconds ?? 20),
-                review_expiry_minutes: Number(incoming.review_expiry_minutes ?? 90)
-            });
+            setSettings(mapIncomingSettings(res.data.settings || {}));
         } catch (error: any) {
             const backendError = error.response?.data;
             setStatus([backendError?.error, backendError?.details].filter(Boolean).join(' - ') || 'Failed to load attendance settings.');
@@ -136,8 +158,8 @@ const AdminSettings: React.FC = () => {
         setSaving(true);
         setStatus('');
 
-        if (recognitionHealth) {
-            setStatus(recognitionHealth);
+        if (scheduleHealth || recognitionHealth) {
+            setStatus(scheduleHealth || recognitionHealth);
             setSaving(false);
             return;
         }
@@ -152,6 +174,9 @@ const AdminSettings: React.FC = () => {
                 review_expiry_minutes: Number(settings.review_expiry_minutes)
             };
             const res = await api.put('/settings/attendance', payload);
+            if (res.data.settings) {
+                setSettings(mapIncomingSettings(res.data.settings));
+            }
             setStatus(res.data.message || 'Attendance settings saved successfully.');
         } catch (error: any) {
             const backendError = error.response?.data;
@@ -294,9 +319,9 @@ const AdminSettings: React.FC = () => {
                                 </div>
                             </div>
 
-                            {recognitionHealth && (
+                            {(scheduleHealth || recognitionHealth) && (
                                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                                    {recognitionHealth}
+                                    {scheduleHealth || recognitionHealth}
                                 </div>
                             )}
                         </div>
