@@ -5,6 +5,7 @@ import {
     formatTimeLabel,
     getAttendanceSettings,
     getAttendanceWindow,
+    getLocalDayOfWeek,
     getLocalDateBounds
 } from '../services/attendanceSettingsService.js';
 import { isHoliday } from '../services/calendarService.js';
@@ -151,12 +152,13 @@ router.post('/', async (req, res) => {
     try {
         terminalProcessing.add(terminalId);
         pruneRecognitionState();
+        const requestNow = new Date();
 
         if (!imageBase64) {
             return res.status(400).json({ error: 'Image is required.' });
         }
 
-        if (new Date().getDay() === 0) {
+        if (getLocalDayOfWeek(requestNow) === 0) {
             clearTerminalConsensus(terminalId);
             return res.json({
                 message: 'Attendance cannot be marked on Sundays.',
@@ -165,7 +167,7 @@ router.post('/', async (req, res) => {
             });
         }
 
-        const holidayInfo = await isHoliday(new Date());
+        const holidayInfo = await isHoliday(requestNow);
 
         if (holidayInfo.isHoliday) {
             clearTerminalConsensus(terminalId);
@@ -177,7 +179,7 @@ router.post('/', async (req, res) => {
         }
 
         const settings = await getAttendanceSettings();
-        const activeAttendanceWindow = getAttendanceWindow(settings);
+        const activeAttendanceWindow = getAttendanceWindow(settings, requestNow);
 
         if (!activeAttendanceWindow) {
             clearTerminalConsensus(terminalId);
@@ -270,7 +272,7 @@ router.post('/', async (req, res) => {
             });
         }
 
-        const { startIso, endIso } = getAttendanceDayBounds();
+        const { startIso, endIso } = getAttendanceDayBounds(requestNow);
         const existingAttendance = await findExistingAttendance({
             studentId: aiResponse.student_id,
             period: activeAttendanceWindow.period,
@@ -299,7 +301,7 @@ router.post('/', async (req, res) => {
                     period: activeAttendanceWindow.period,
                     source: 'face_auto',
                     confidence,
-                    timestamp: new Date().toISOString()
+                    timestamp: requestNow.toISOString()
                 }]);
 
             if (insertError) {

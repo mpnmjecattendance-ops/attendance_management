@@ -1,24 +1,20 @@
 import express from 'express';
 import { supabase } from '../utils/supabaseClient.js';
-import { formatLocalDate } from '../services/attendanceSettingsService.js';
+import { createLocalTimestamp, formatLocalDate, getLocalDateBounds } from '../services/attendanceSettingsService.js';
 import { syncAbsencesForToday } from '../services/attendanceSyncService.js';
 
 const router = express.Router();
 
 const getPeriodTimestamp = (date, period) => {
-    const timestamp = new Date(`${date}T12:00:00`);
-
     if ((period || '').toLowerCase() === 'morning') {
-        timestamp.setHours(9, 0, 0, 0);
-        return timestamp.toISOString();
+        return createLocalTimestamp(date, '09:00:00');
     }
 
     if ((period || '').toLowerCase() === 'evening') {
-        timestamp.setHours(16, 0, 0, 0);
-        return timestamp.toISOString();
+        return createLocalTimestamp(date, '16:00:00');
     }
 
-    return timestamp.toISOString();
+    return createLocalTimestamp(date, '12:00:00');
 };
 
 router.get('/report', async (req, res) => {
@@ -108,12 +104,12 @@ router.get('/report', async (req, res) => {
         }
 
         if (normalizedFromDate) {
-            const start = new Date(`${normalizedFromDate}T00:00:00`);
+            const { start } = getLocalDateBounds(normalizedFromDate);
             query = query.gte('timestamp', start.toISOString());
         }
 
         if (normalizedToDate) {
-            const end = new Date(`${normalizedToDate}T23:59:59.999`);
+            const { end } = getLocalDateBounds(normalizedToDate);
             query = query
                 .lte('timestamp', end.toISOString());
         }
@@ -239,16 +235,15 @@ router.post('/override', async (req, res) => {
             return res.status(400).json({ error: 'studentId, date, period, and status are required.' });
         }
 
-        const start = new Date(`${date}T00:00:00`).toISOString();
-        const end = new Date(`${date}T23:59:59.999`).toISOString();
+        const { start, end } = getLocalDateBounds(date);
 
         const { data: existingAttendance, error: attendanceLookupError } = await supabase
             .from('attendance')
             .select('id')
             .eq('student_id', studentId)
             .eq('period', period)
-            .gte('timestamp', start)
-            .lte('timestamp', end)
+            .gte('timestamp', start.toISOString())
+            .lte('timestamp', end.toISOString())
             .maybeSingle();
 
         if (attendanceLookupError) {

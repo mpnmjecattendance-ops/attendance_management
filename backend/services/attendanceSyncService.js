@@ -1,6 +1,7 @@
 import { supabase } from '../utils/supabaseClient.js';
 import {
     formatLocalDate,
+    getLocalDayOfWeek,
     getAttendanceSettings,
     getCompletedAttendancePeriods,
     getLocalDateBounds
@@ -9,7 +10,7 @@ import { isHoliday } from './calendarService.js';
 import { expireStaleReviews, REVIEW_STATUS } from './reviewService.js';
 
 export const syncAbsencesForToday = async (now = new Date()) => {
-    if (now.getDay() === 0) {
+    if (getLocalDayOfWeek(now) === 0) {
         return { inserted: 0, processedPeriods: [], date: formatLocalDate(now), message: "It's Sunday - no attendance sync today." };
     }
 

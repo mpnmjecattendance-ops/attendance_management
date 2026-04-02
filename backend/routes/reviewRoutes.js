@@ -1,31 +1,19 @@
 import express from 'express';
 import { supabase } from '../utils/supabaseClient.js';
 import { getPendingReviews, REVIEW_STATUS } from '../services/reviewService.js';
+import { createLocalTimestamp, getLocalDateBounds } from '../services/attendanceSettingsService.js';
 
 const router = express.Router();
 
-const getReviewDayBounds = (timestamp) => {
-    const date = new Date(timestamp);
-    const start = new Date(date);
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date(date);
-    end.setHours(23, 59, 59, 999);
-
-    return { start, end };
-};
+const getReviewDayBounds = (timestamp) => getLocalDateBounds(new Date(timestamp));
 
 const resolveAttendanceTimestamp = (review) => {
-    const date = new Date(review.created_at);
-
     if ((review.period || '').toLowerCase() === 'morning') {
-        date.setHours(9, 0, 0, 0);
-        return date.toISOString();
+        return createLocalTimestamp(review.created_at, '09:00:00');
     }
 
     if ((review.period || '').toLowerCase() === 'evening') {
-        date.setHours(16, 0, 0, 0);
-        return date.toISOString();
+        return createLocalTimestamp(review.created_at, '16:00:00');
     }
 
     return review.created_at;

@@ -14,6 +14,8 @@ export const DEFAULT_ATTENDANCE_SETTINGS = {
     review_expiry_minutes: 90
 };
 
+export const ATTENDANCE_TIMEZONE = process.env.ATTENDANCE_TIMEZONE || process.env.APP_TIMEZONE || 'Asia/Kolkata';
+
 export const ATTENDANCE_PERIODS = [
     { period: 'Morning', startField: 'morning_start', endField: 'morning_end' },
     { period: 'Evening', startField: 'evening_start', endField: 'evening_end' }
@@ -45,25 +47,136 @@ export const toMinutes = (value) => {
     return (hours * 60) + minutes;
 };
 
+const DATE_TIME_PARTS_FORMATTER = new Intl.DateTimeFormat('en-US', {
+    timeZone: ATTENDANCE_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+});
+
+const LOCAL_WEEKDAY_MAP = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6
+};
+
+const padNumber = (value, size = 2) => String(value).padStart(size, '0');
+
+const getDatePartsInTimezone = (date = new Date()) => {
+    const sourceDate = date instanceof Date ? date : new Date(date);
+    const parts = Object.fromEntries(
+        DATE_TIME_PARTS_FORMATTER
+            .formatToParts(sourceDate)
+            .filter(({ type }) => type !== 'literal')
+            .map(({ type, value }) => [type, value])
+    );
+
+    return {
+        year: Number(parts.year),
+        month: Number(parts.month),
+        day: Number(parts.day),
+        hour: Number(parts.hour),
+        minute: Number(parts.minute),
+        second: Number(parts.second),
+        weekday: parts.weekday
+    };
+};
+
+const getTimeZoneOffsetMilliseconds = (date = new Date()) => {
+    const normalizedDate = date instanceof Date ? new Date(date) : new Date(date);
+    normalizedDate.setUTCMilliseconds(0);
+
+    const parts = getDatePartsInTimezone(normalizedDate);
+    const asUtc = Date.UTC(
+        parts.year,
+        parts.month - 1,
+        parts.day,
+        parts.hour,
+        parts.minute,
+        parts.second
+    );
+
+    return asUtc - normalizedDate.getTime();
+};
+
+const buildUtcDateForLocalParts = ({
+    year,
+    month,
+    day,
+    hour = 0,
+    minute = 0,
+    second = 0,
+    millisecond = 0
+}) => {
+    const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+    let offset = getTimeZoneOffsetMilliseconds(new Date(utcGuess));
+    let timestamp = utcGuess - offset;
+    const adjustedOffset = getTimeZoneOffsetMilliseconds(new Date(timestamp));
+
+    if (adjustedOffset !== offset) {
+        offset = adjustedOffset;
+        timestamp = utcGuess - offset;
+    }
+
+    return new Date(timestamp);
+};
+
+const getLocalDateString = (date = new Date()) => {
+    const parts = getDatePartsInTimezone(date);
+    return `${parts.year}-${padNumber(parts.month)}-${padNumber(parts.day)}`;
+};
+
+const resolveLocalDateInput = (dateInput = new Date()) => {
+    if (dateInput instanceof Date) {
+        return getLocalDateString(dateInput);
+    }
+
+    if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+        return dateInput;
+    }
+
+    return getLocalDateString(new Date(dateInput));
+};
+
 export const formatLocalDate = (date = new Date()) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return getLocalDateString(date);
 };
 
 export const getLocalDateBounds = (dateInput = new Date()) => {
-    const date = dateInput instanceof Date
-        ? new Date(dateInput)
-        : new Date(`${dateInput}T00:00:00`);
-
-    const start = new Date(date);
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date(date);
-    end.setHours(23, 59, 59, 999);
+    const [year, month, day] = resolveLocalDateInput(dateInput).split('-').map(Number);
+    const start = buildUtcDateForLocalParts({ year, month, day, hour: 0, minute: 0, second: 0, millisecond: 0 });
+    const end = buildUtcDateForLocalParts({ year, month, day, hour: 23, minute: 59, second: 59, millisecond: 999 });
 
     return { start, end };
+};
+
+export const getLocalDayOfWeek = (date = new Date()) => {
+    const parts = getDatePartsInTimezone(date);
+    return LOCAL_WEEKDAY_MAP[parts.weekday] ?? 0;
+};
+
+export const createLocalTimestamp = (dateInput = new Date(), timeValue = '12:00:00') => {
+    const [year, month, day] = resolveLocalDateInput(dateInput).split('-').map(Number);
+    const [hour, minute, second] = normalizeTimeValue(timeValue).split(':').map(Number);
+
+    return buildUtcDateForLocalParts({
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        millisecond: 0
+    }).toISOString();
 };
 
 export const hydrateAttendanceSettings = (row = {}) => ({
@@ -202,7 +315,8 @@ export const upsertAttendanceSettings = async (payload) => {
 };
 
 export const getAttendanceWindow = (settings, now = new Date()) => {
-    const currentMinutes = (now.getHours() * 60) + now.getMinutes();
+    const currentParts = getDatePartsInTimezone(now);
+    const currentMinutes = (currentParts.hour * 60) + currentParts.minute;
 
     for (const { period, startField, endField } of ATTENDANCE_PERIODS) {
         const startMinutes = toMinutes(settings[startField]);
@@ -221,7 +335,8 @@ export const getAttendanceWindow = (settings, now = new Date()) => {
 };
 
 export const getCompletedAttendancePeriods = (settings, now = new Date()) => {
-    const currentMinutes = (now.getHours() * 60) + now.getMinutes();
+    const currentParts = getDatePartsInTimezone(now);
+    const currentMinutes = (currentParts.hour * 60) + currentParts.minute;
 
     return ATTENDANCE_PERIODS
         .filter(({ endField }) => currentMinutes > toMinutes(settings[endField]))

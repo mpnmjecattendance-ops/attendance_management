@@ -2,6 +2,7 @@ import express from 'express';
 import twilio from 'twilio'; // Ensure this is installed
 import { supabase } from '../utils/supabaseClient.js';
 import dotenv from 'dotenv';
+import { getLocalDateBounds } from '../services/attendanceSettingsService.js';
 dotenv.config();
 
 const router = express.Router();
@@ -72,8 +73,7 @@ router.post('/send', async (req, res) => {
         }
 
         // Duplicate prevention logic (e.g., check if notification already sent today)
-        const startOfDay = new Date();
-        startOfDay.setHours(0,0,0,0);
+        const { start: startOfDay } = getLocalDateBounds();
         
         const { data: recentNotifs } = await supabase
             .from('notifications')
