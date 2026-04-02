@@ -50,6 +50,7 @@ GUIDE_ELLIPSE_CENTER_Y = float(os.environ.get("GUIDE_ELLIPSE_CENTER_Y", "0.50"))
 GUIDE_ELLIPSE_RADIUS_X = float(os.environ.get("GUIDE_ELLIPSE_RADIUS_X", "0.23"))
 GUIDE_ELLIPSE_RADIUS_Y = float(os.environ.get("GUIDE_ELLIPSE_RADIUS_Y", "0.39"))
 GUIDE_ELLIPSE_TOLERANCE = float(os.environ.get("GUIDE_ELLIPSE_TOLERANCE", "1.00"))
+GUIDE_CROP_PADDING_RATIO = float(os.environ.get("GUIDE_CROP_PADDING_RATIO", "0.14"))
 
 face_analyzer = None
 face_analyzer_lock = threading.Lock()
@@ -307,6 +308,42 @@ def is_face_inside_guide(image: np.ndarray, face: Any) -> bool:
     return compute_guide_distance(image, face) <= GUIDE_ELLIPSE_TOLERANCE
 
 
+def get_guide_crop_bounds(image: np.ndarray, padding_ratio: float = GUIDE_CROP_PADDING_RATIO) -> tuple[int, int, int, int]:
+    image_height, image_width = image.shape[:2]
+    center_x = GUIDE_ELLIPSE_CENTER_X * image_width
+    center_y = GUIDE_ELLIPSE_CENTER_Y * image_height
+    radius_x = GUIDE_ELLIPSE_RADIUS_X * image_width * (1.0 + padding_ratio)
+    radius_y = GUIDE_ELLIPSE_RADIUS_Y * image_height * (1.0 + padding_ratio)
+
+    x1 = max(0, int(round(center_x - radius_x)))
+    y1 = max(0, int(round(center_y - radius_y)))
+    x2 = min(image_width, int(round(center_x + radius_x)))
+    y2 = min(image_height, int(round(center_y + radius_y)))
+
+    return x1, y1, x2, y2
+
+
+def detect_faces_in_guide_region(image: np.ndarray) -> List[Any]:
+    analyzer = get_face_analyzer()
+    x1, y1, x2, y2 = get_guide_crop_bounds(image)
+    guide_crop = image[y1:y2, x1:x2]
+    faces = analyzer.get(guide_crop)
+
+    for face in faces:
+        bbox = np.array(face.bbox, dtype=np.float32)
+        bbox[[0, 2]] += x1
+        bbox[[1, 3]] += y1
+        face.bbox = bbox
+
+        if getattr(face, "kps", None) is not None:
+            keypoints = np.array(face.kps, dtype=np.float32)
+            keypoints[:, 0] += x1
+            keypoints[:, 1] += y1
+            face.kps = keypoints
+
+    return faces
+
+
 def compute_face_quality(image: np.ndarray, face: Any, guide_distance: Optional[float] = None) -> Dict[str, float]:
     face_crop = extract_face_crop(image, face)
     gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
@@ -359,23 +396,16 @@ def compute_face_quality(image: np.ndarray, face: Any, guide_distance: Optional[
 
 
 def validate_face_capture(image: np.ndarray, enforce_guide: bool = False) -> Dict[str, Any]:
-    analyzer = get_face_analyzer()
-    faces = analyzer.get(image)
-
-    if not faces:
-        return {"accepted": False, "reason": "No face detected.", "reason_code": "no_face"}
-
-    if not enforce_guide and len(faces) > 1:
-        return {
-            "accepted": False,
-            "reason": "Multiple faces detected. Please keep only one face in frame.",
-            "reason_code": "multiple_faces"
-        }
-
-    selected_faces = faces
-    guide_distance = None
-
     if enforce_guide:
+        guide_distance = None
+        faces = detect_faces_in_guide_region(image)
+        if not faces:
+            return {
+                "accepted": False,
+                "reason": "Place your face inside the guide circle.",
+                "reason_code": "face_not_in_guide"
+            }
+
         guide_faces = [face for face in faces if is_face_inside_guide(image, face)]
         if not guide_faces:
             return {
@@ -390,6 +420,22 @@ def validate_face_capture(image: np.ndarray, enforce_guide: bool = False) -> Dic
                 "reason_code": "multiple_faces"
             }
         selected_faces = guide_faces
+    else:
+        analyzer = get_face_analyzer()
+        faces = analyzer.get(image)
+
+        if not faces:
+            return {"accepted": False, "reason": "No face detected.", "reason_code": "no_face"}
+
+        if len(faces) > 1:
+            return {
+                "accepted": False,
+                "reason": "Multiple faces detected. Please keep only one face in frame.",
+                "reason_code": "multiple_faces"
+            }
+
+        selected_faces = faces
+        guide_distance = None
 
     face = selected_faces[0]
     guide_distance = compute_guide_distance(image, face) if enforce_guide else None

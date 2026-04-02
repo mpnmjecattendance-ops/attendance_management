@@ -12,6 +12,26 @@ const GUIDE_ELLIPSE = {
     centerYPercent: 50,
     labelTopPercent: 16
 } as const;
+const GUIDE_RADII = {
+    x: GUIDE_ELLIPSE.widthPercent / 200,
+    y: GUIDE_ELLIPSE.heightPercent / 200
+} as const;
+const LOCAL_FACE_AREA_RATIO = 0.065;
+const KIOSK_VIDEO_CONSTRAINTS = { width: 960, height: 540, facingMode: 'user' } as const;
+const KIOSK_SCREENSHOT_QUALITY = 0.82;
+
+type LocalDetectedFace = {
+    boundingBox: DOMRectReadOnly;
+};
+
+type BrowserFaceDetector = {
+    detect: (input: HTMLVideoElement) => Promise<LocalDetectedFace[]>;
+};
+
+type BrowserFaceDetectorConstructor = new (options?: {
+    fastMode?: boolean;
+    maxDetectedFaces?: number;
+}) => BrowserFaceDetector;
 
 type RecognitionStatus =
     | 'Success'
@@ -286,8 +306,41 @@ const pushLog = (prev: RecognitionLog[], next: RecognitionLog) => {
     return [next, ...prev].slice(0, 12);
 };
 
+const getBrowserFaceDetector = (): BrowserFaceDetector | null => {
+    if (typeof window === 'undefined') {
+        return null;
+    }
+
+    const detectorConstructor = (window as Window & { FaceDetector?: BrowserFaceDetectorConstructor }).FaceDetector;
+    if (!detectorConstructor) {
+        return null;
+    }
+
+    try {
+        return new detectorConstructor({
+            fastMode: true,
+            maxDetectedFaces: 4
+        });
+    } catch {
+        return null;
+    }
+};
+
+const isInsideGuide = (boundingBox: DOMRectReadOnly, frameWidth: number, frameHeight: number) => {
+    const centerX = (boundingBox.x + (boundingBox.width / 2)) / Math.max(frameWidth, 1);
+    const centerY = (boundingBox.y + (boundingBox.height / 2)) / Math.max(frameHeight, 1);
+    const normalizedX = (centerX - (GUIDE_ELLIPSE.centerXPercent / 100)) / Math.max(GUIDE_RADII.x, 0.001);
+    const normalizedY = (centerY - (GUIDE_ELLIPSE.centerYPercent / 100)) / Math.max(GUIDE_RADII.y, 0.001);
+    return Math.sqrt((normalizedX ** 2) + (normalizedY ** 2)) <= 1;
+};
+
+const getFaceAreaRatio = (boundingBox: DOMRectReadOnly, frameWidth: number, frameHeight: number) => (
+    (boundingBox.width * boundingBox.height) / Math.max(frameWidth * frameHeight, 1)
+);
+
 const AttendanceKiosk: React.FC = () => {
     const webcamRef = useRef<Webcam>(null);
+    const faceDetectorRef = useRef<BrowserFaceDetector | null>(null);
     const [logs, setLogs] = useState<RecognitionLog[]>([]);
     const [lastScan, setLastScan] = useState<RecognitionLog | null>(null);
     const [isCapturing, setIsCapturing] = useState(true);
@@ -295,10 +348,72 @@ const AttendanceKiosk: React.FC = () => {
     const [liveGuide, setLiveGuide] = useState<LiveGuide>(DEFAULT_GUIDE);
 
     useEffect(() => {
+        faceDetectorRef.current = getBrowserFaceDetector();
+    }, []);
+
+    useEffect(() => {
         let active = true;
+
+        const runLocalGuideCheck = async () => {
+            const detector = faceDetectorRef.current;
+            const video = webcamRef.current?.video;
+
+            if (!detector || !video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+                return { ready: true as const };
+            }
+
+            try {
+                const faces = await detector.detect(video);
+                const insideFaces = faces.filter((face) => isInsideGuide(face.boundingBox, video.videoWidth, video.videoHeight));
+
+                if (insideFaces.length === 0) {
+                    if (faces.length === 0) {
+                        return {
+                            ready: false as const,
+                            status: 'NoFace' as RecognitionStatus,
+                            message: 'Place your face inside the guide circle and look at the camera.'
+                        };
+                    }
+
+                    return {
+                        ready: false as const,
+                        status: 'CenterFace' as RecognitionStatus,
+                        message: 'Move your face fully inside the guide circle to start scanning.'
+                    };
+                }
+
+                if (insideFaces.length > 1) {
+                    return {
+                        ready: false as const,
+                        status: 'MultipleFaces' as RecognitionStatus,
+                        message: 'Only one face should be inside the guide circle.'
+                    };
+                }
+
+                if (getFaceAreaRatio(insideFaces[0].boundingBox, video.videoWidth, video.videoHeight) < LOCAL_FACE_AREA_RATIO) {
+                    return {
+                        ready: false as const,
+                        status: 'MoveCloser' as RecognitionStatus,
+                        message: 'Move closer so your face fills more of the guide circle.'
+                    };
+                }
+
+                return { ready: true as const };
+            } catch {
+                faceDetectorRef.current = null;
+                return { ready: true as const };
+            }
+        };
 
         const captureFrame = async () => {
             if (!isCapturing || !active) return;
+
+            const localGuide = await runLocalGuideCheck();
+            if (!localGuide.ready) {
+                setLiveGuide(buildGuide(localGuide.status, localGuide.message));
+                if (active) setTimeout(captureFrame, getCaptureDelay(localGuide.status));
+                return;
+            }
 
             const imageSrc = webcamRef.current?.getScreenshot();
             if (!imageSrc) {
@@ -445,10 +560,9 @@ const AttendanceKiosk: React.FC = () => {
                             audio={false}
                             ref={webcamRef}
                             screenshotFormat="image/jpeg"
-                            screenshotQuality={0.95}
-                            forceScreenshotSourceSize
+                            screenshotQuality={KIOSK_SCREENSHOT_QUALITY}
                             className="w-full h-full object-cover"
-                            videoConstraints={{ width: 1280, height: 720, facingMode: 'user' }}
+                            videoConstraints={KIOSK_VIDEO_CONSTRAINTS}
                         />
                         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-slate-950/25 via-transparent to-slate-950/30" />
                         <div
@@ -464,7 +578,7 @@ const AttendanceKiosk: React.FC = () => {
                             className="pointer-events-none absolute left-1/2 -translate-x-1/2 rounded-full bg-white/88 px-4 py-2 text-[11px] font-black uppercase tracking-[0.28em] text-slate-700 shadow-lg backdrop-blur"
                             style={{ top: `${GUIDE_ELLIPSE.labelTopPercent}%` }}
                         >
-                            Stand Alone In Frame
+                            Keep Face Inside Circle
                         </div>
                         <div className="pointer-events-none absolute inset-x-6 top-6 flex justify-end">
                             <div className={`max-w-sm rounded-2xl border px-4 py-3 shadow-xl backdrop-blur ${getGuideToneClasses(liveGuide.tone)}`}>
