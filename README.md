@@ -1,3 +1,12 @@
+---
+title: Attendance AI
+emoji: 🏢
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+---
+
 # Attendance Management
 
 Attendance management system with:
