@@ -150,8 +150,8 @@ const AdminReports: React.FC = () => {
 
   const sendAlert = async (record: any) => {
     const studentName = record.students?.name || 'Student';
-    if (record.status === 'Present') {
-      alert(`${studentName} is marked present. No parent alert is needed.`);
+    if (record.status !== 'Absent') {
+      alert(`Parent alerts are only available for absent students. ${studentName} is marked ${record.status?.toLowerCase() || 'with no status'}.`);
       return;
     }
 
@@ -167,30 +167,6 @@ const AdminReports: React.FC = () => {
     } catch (err: any) {
       const backendError = err.response?.data;
       alert([backendError?.message, backendError?.error, backendError?.details].filter(Boolean).join(' - ') || 'Failed to send alert.');
-    } finally {
-      setActionKey(null);
-    }
-  };
-
-  const overrideAttendance = async (record: any, nextStatus: 'Present' | 'Absent' | 'Late') => {
-    if (!record.period) {
-      alert('This record does not have a morning/evening period yet, so it cannot be overridden safely.');
-      return;
-    }
-
-    const reason = window.prompt(`Reason for setting ${record.students?.name || 'this student'} to ${nextStatus}:`, record.notes || '');
-    if (reason === null) return;
-
-    setActionKey(`override-${record.id}-${nextStatus}`);
-    setStatus('');
-    try {
-      const date = new Date(record.timestamp).toISOString().slice(0, 10);
-      const res = await api.post('/attendance/override', { studentId: record.student_id, date, period: record.period, status: nextStatus, reason });
-      setStatus(res.data?.message || 'Attendance override saved successfully.');
-      await fetchReports(filters);
-    } catch (err: any) {
-      const backendError = err.response?.data;
-      setStatus([backendError?.error, backendError?.details].filter(Boolean).join(' - ') || 'Failed to save attendance override.');
     } finally {
       setActionKey(null);
     }
@@ -290,7 +266,7 @@ const AdminReports: React.FC = () => {
     <div className="container mx-auto p-4 max-w-7xl space-y-8">
       <div className="flex flex-col gap-2">
         <h2 className="text-3xl font-bold flex items-center gap-2"><Calendar className="text-blue-600" /> Attendance Reports & Review Console</h2>
-        <p className="text-gray-500">Filter attendance, export clean reports, review borderline scans, and apply manual corrections without leaving the dashboard.</p>
+        <p className="text-gray-500">Filter attendance, export clean reports, review borderline scans, and trigger parent alerts for absent students.</p>
       </div>
 
       <form onSubmit={(event) => { event.preventDefault(); if (filters.fromDate && filters.toDate && filters.fromDate > filters.toDate) { setError('From date cannot be later than to date.'); return; } fetchReports(filters); }} className="bg-white border rounded-2xl shadow-sm p-5">
@@ -421,12 +397,20 @@ const AdminReports: React.FC = () => {
                   <td className="p-4 text-gray-600">{formatSource(record.source)}</td>
                   <td className="p-4 text-gray-600">{formatConfidence(record.confidence)}</td>
                   <td className="p-4 text-gray-500 max-w-[220px] whitespace-pre-wrap">{record.notes || '—'}</td>
-                  <td className="p-4"><div className="flex flex-wrap gap-2 min-w-[260px]">
-                    {record.status === 'Present' ? <span className="inline-flex items-center rounded bg-green-50 px-3 py-2 text-sm font-semibold text-green-700">No alert needed</span> : <button type="button" onClick={() => sendAlert(record)} disabled={actionKey === `alert-${record.id}`} className="flex items-center gap-2 text-sm bg-red-50 text-red-600 px-3 py-2 rounded hover:bg-red-100 disabled:opacity-50 font-semibold"><PhoneCall size={14} /> {actionKey === `alert-${record.id}` ? 'Sending...' : 'Alert Parent'}</button>}
-                    <button type="button" onClick={() => overrideAttendance(record, 'Present')} disabled={actionKey === `override-${record.id}-Present`} className="rounded bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">Set Present</button>
-                    <button type="button" onClick={() => overrideAttendance(record, 'Late')} disabled={actionKey === `override-${record.id}-Late`} className="rounded bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50">Set Late</button>
-                    <button type="button" onClick={() => overrideAttendance(record, 'Absent')} disabled={actionKey === `override-${record.id}-Absent`} className="rounded bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50">Set Absent</button>
-                  </div></td>
+                  <td className="p-4">
+                    {record.status === 'Absent' ? (
+                      <button
+                        type="button"
+                        onClick={() => sendAlert(record)}
+                        disabled={actionKey === `alert-${record.id}`}
+                        className="inline-flex items-center gap-2 text-sm bg-red-50 text-red-600 px-3 py-2 rounded hover:bg-red-100 disabled:opacity-50 font-semibold"
+                      >
+                        <PhoneCall size={14} /> {actionKey === `alert-${record.id}` ? 'Sending...' : 'Send Alert'}
+                      </button>
+                    ) : (
+                      <span className="text-gray-400 font-medium">-</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
