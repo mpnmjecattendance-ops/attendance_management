@@ -26,17 +26,27 @@ const getPeriodMessage = (period: string) => {
   return { english: '', tamil: '' };
 };
 
-const buildParentAlertMessage = (studentName: string, status: string, period: string) => {
+const formatAlertDate = (timestamp?: string | null) => {
+  if (!timestamp) return 'today';
+
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return 'today';
+
+  return `on ${parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}`;
+};
+
+const buildParentAlertMessage = (studentName: string, status: string, period: string, timestamp?: string | null) => {
   const periodMessage = getPeriodMessage(period);
+  const dateMessage = formatAlertDate(timestamp);
   if (status.toLowerCase() === 'absent') {
     return [
-      `Attendance Alert: ${studentName} is absent for college today${periodMessage.english}. Please check.`,
+      `Attendance Alert: ${studentName} was absent for college ${dateMessage}${periodMessage.english}. Please check.`,
       `????? ??????????: ${studentName} ????? ??????????? ????????${periodMessage.tamil}. ?????????? ???????????.`
     ].join('\n');
   }
 
   return [
-    `Attendance Alert: ${studentName} is marked ${status.toLowerCase()} for college today${periodMessage.english}. Please check.`,
+    `Attendance Alert: ${studentName} was marked ${status.toLowerCase()} for college ${dateMessage}${periodMessage.english}. Please check.`,
     `????? ??????????: ${studentName} ????? ??????????? ${status === 'Late' ? '??????? ???????????' : '????? ???????? ??????? ??????'}${periodMessage.tamil}. ?????????? ???????????.`
   ].join('\n');
 };
@@ -160,13 +170,16 @@ const AdminReports: React.FC = () => {
     try {
       const res = await api.post('/notifications/send', {
         studentId: record.student_id,
-        message: buildParentAlertMessage(studentName, record.status, record.period || 'attendance'),
+        message: buildParentAlertMessage(studentName, record.status, record.period || 'attendance', record.timestamp),
         type: 'SMS'
       });
+      setStatus(res.data?.message || `SMS alert sent to parent of ${studentName}.`);
       alert(res.data?.message || `SMS alert sent to parent of ${studentName}.`);
     } catch (err: any) {
       const backendError = err.response?.data;
-      alert([backendError?.message, backendError?.error, backendError?.details].filter(Boolean).join(' - ') || 'Failed to send alert.');
+      const nextMessage = [backendError?.message, backendError?.error, backendError?.details].filter(Boolean).join(' - ') || 'Failed to send alert.';
+      setStatus(nextMessage);
+      alert(nextMessage);
     } finally {
       setActionKey(null);
     }
