@@ -1,0 +1,30 @@
+# AI Service Deployment Ignore
+# ---------------------------
+
+# Environments
+venv/
+.venv/
+.venv312/
+ENV/
+env/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment Secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+uvicorn.*.log
+
+# OS Metadata
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
