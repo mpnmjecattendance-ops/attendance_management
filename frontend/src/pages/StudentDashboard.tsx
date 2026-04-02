@@ -33,6 +33,7 @@ const statusBadgeClasses: Record<string, string> = {
     Present: 'bg-green-100 text-green-700',
     Absent: 'bg-red-100 text-red-700',
     Late: 'bg-amber-100 text-amber-700',
+    'On Duty': 'bg-sky-100 text-sky-700',
     Pending: 'bg-gray-100 text-gray-700'
 };
 
@@ -146,16 +147,19 @@ const StudentDashboard: React.FC = () => {
         const present = report.filter((log) => log.status === 'Present').length;
         const absent = report.filter((log) => log.status === 'Absent').length;
         const late = report.filter((log) => log.status === 'Late').length;
+        const onDuty = report.filter((log) => log.status === 'On Duty').length;
         const total = report.length;
-        const overallPercentage = total > 0 ? Math.round((present / total) * 100) : 0;
+        const creditedAttendance = present + onDuty;
+        const overallPercentage = total > 0 ? Math.round((creditedAttendance / total) * 100) : 0;
         const neededForSeventyFive = total > 0
-            ? Math.max(0, Math.ceil((0.75 * total - present) / 0.25))
+            ? Math.max(0, Math.ceil((0.75 * total - creditedAttendance) / 0.25))
             : 0;
 
         return {
             present,
             absent,
             late,
+            onDuty,
             total,
             overallPercentage,
             neededForSeventyFive
@@ -345,7 +349,7 @@ const StudentDashboard: React.FC = () => {
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4">
                 <div className="bg-white rounded-2xl shadow-sm border p-5">
                     <div className="flex items-center gap-3 mb-2">
                         <CheckCircle2 className="text-green-600" size={20} />
@@ -368,6 +372,14 @@ const StudentDashboard: React.FC = () => {
                         <p className="text-sm text-gray-500">Late</p>
                     </div>
                     <p className="text-3xl font-bold text-gray-900">{summary.late}</p>
+                </div>
+
+                <div className="bg-white rounded-2xl shadow-sm border p-5">
+                    <div className="flex items-center gap-3 mb-2">
+                        <UserSquare2 className="text-sky-600" size={20} />
+                        <p className="text-sm text-gray-500">On Duty</p>
+                    </div>
+                    <p className="text-3xl font-bold text-gray-900">{summary.onDuty}</p>
                 </div>
 
                 <div className="bg-white rounded-2xl shadow-sm border p-5">
@@ -465,6 +477,7 @@ const StudentDashboard: React.FC = () => {
                             <option value="Present">Present</option>
                             <option value="Absent">Absent</option>
                             <option value="Late">Late</option>
+                            <option value="On Duty">On Duty</option>
                         </select>
                     </div>
                 </div>

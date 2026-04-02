@@ -16,6 +16,7 @@ import { REVIEW_STATUS } from '../services/reviewService.js';
 const router = express.Router();
 const STUDENT_SELECT = 'id, name, register_number, dob, blood_group, address, year, semester, department_id, is_active, created_at';
 const STUDENT_SELECT_FALLBACK = 'id, name, register_number, dob, blood_group, address, year, semester, department_id, created_at';
+const ALLOWED_OVERRIDE_STATUSES = new Set(['Present', 'Absent', 'Late', 'On Duty']);
 
 const getPeriodTimestamp = (date, period) => {
     if ((period || '').toLowerCase() === 'morning') {
@@ -423,6 +424,18 @@ router.post('/override', async (req, res) => {
             return res.status(400).json({ error: 'studentId, date, period, and status are required.' });
         }
 
+        if (!ALLOWED_OVERRIDE_STATUSES.has(status)) {
+            return res.status(400).json({
+                error: `Status must be one of: ${Array.from(ALLOWED_OVERRIDE_STATUSES).join(', ')}.`
+            });
+        }
+
+        const notes = reason?.trim() || (
+            status === 'On Duty'
+                ? 'Marked as On Duty by admin.'
+                : `Attendance status changed to ${status} by admin.`
+        );
+
         const { start, end } = getLocalDateBounds(date);
 
         const { data: existingAttendance, error: attendanceLookupError } = await supabase
@@ -443,10 +456,10 @@ router.post('/override', async (req, res) => {
                 .from('attendance')
                 .update({
                     status,
-                    source: 'manual',
+                    source: 'manual_override',
                     confidence: null,
                     review_id: null,
-                    notes: reason
+                    notes
                 })
                 .eq('id', existingAttendance.id);
 
@@ -461,10 +474,10 @@ router.post('/override', async (req, res) => {
                     session_id: null,
                     status,
                     period,
-                    source: 'manual',
+                    source: 'manual_override',
                     confidence: null,
                     review_id: null,
-                    notes: reason,
+                    notes,
                     timestamp: getPeriodTimestamp(date, period)
                 }]);
 

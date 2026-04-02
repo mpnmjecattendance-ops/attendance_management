@@ -5,6 +5,12 @@ import { api } from '../lib/api';
 
 const YEAR_OPTIONS = ['1', '2', '3', '4'];
 const SEMESTER_OPTIONS = ['1', '2', '3', '4', '5', '6', '7', '8'];
+const STATUS_BADGE_CLASSES: Record<string, string> = {
+  Present: 'bg-green-100 text-green-700',
+  Absent: 'bg-red-100 text-red-700',
+  Late: 'bg-amber-100 text-amber-700',
+  'On Duty': 'bg-sky-100 text-sky-700'
+};
 
 const getTodayDateString = () => {
   const now = new Date();
@@ -22,6 +28,7 @@ const defaultFilters = {
 const formatSource = (source?: string | null) => !source ? 'Legacy' : source.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
 const formatConfidence = (value?: number | null) => value === null || value === undefined || Number.isNaN(Number(value)) ? '—' : `${(Number(value) * 100).toFixed(1)}%`;
 const getExportFileName = (filters: typeof defaultFilters) => `attendance-report-${filters.fromDate || 'all'}-to-${filters.toDate || 'all'}.xlsx`;
+const getReportDate = (timestamp?: string | null) => (timestamp ? timestamp.split('T')[0] : '');
 
 const AdminReports: React.FC = () => {
   const [attendanceData, setAttendanceData] = useState<any[]>([]);
@@ -30,7 +37,7 @@ const AdminReports: React.FC = () => {
   const [students, setStudents] = useState<any[]>([]);
   const [filters, setFilters] = useState(defaultFilters);
   const [reviewAssignments, setReviewAssignments] = useState<Record<string, string>>({});
-  const [stats, setStats] = useState({ present: 0, absent: 0, late: 0, total: 0, pendingReviews: 0 });
+  const [stats, setStats] = useState({ present: 0, absent: 0, late: 0, onDuty: 0, total: 0, pendingReviews: 0 });
   const [loading, setLoading] = useState(true);
   const [reportsLoading, setReportsLoading] = useState(true);
   const [actionKey, setActionKey] = useState<string | null>(null);
@@ -46,7 +53,8 @@ const AdminReports: React.FC = () => {
     const present = data.filter((record) => record.status === 'Present').length;
     const absent = data.filter((record) => record.status === 'Absent').length;
     const late = data.filter((record) => record.status === 'Late').length;
-    setStats({ present, absent, late, total: data.length, pendingReviews: pendingReviewsCount });
+    const onDuty = data.filter((record) => record.status === 'On Duty').length;
+    setStats({ present, absent, late, onDuty, total: data.length, pendingReviews: pendingReviewsCount });
   };
 
   const buildReportParams = (activeFilters: typeof defaultFilters) => {
@@ -150,6 +158,39 @@ const AdminReports: React.FC = () => {
       const nextMessage = [backendError?.message, backendError?.error, backendError?.details].filter(Boolean).join(' - ') || 'Failed to send alert.';
       setStatus(nextMessage);
       alert(nextMessage);
+    } finally {
+      setActionKey(null);
+    }
+  };
+
+  const toggleOnDutyStatus = async (record: any) => {
+    if (!record.student_id || !record.period) {
+      setStatus('This record cannot be updated because the student or period is missing.');
+      return;
+    }
+
+    const nextStatus = record.status === 'On Duty' ? 'Absent' : 'On Duty';
+    const recordDate = getReportDate(record.timestamp);
+
+    if (!recordDate) {
+      setStatus('This record cannot be updated because its attendance date is unavailable.');
+      return;
+    }
+
+    setActionKey(`status-${record.id}`);
+    setStatus('');
+    try {
+      const res = await api.post('/attendance/override', {
+        studentId: record.student_id,
+        date: recordDate,
+        period: record.period,
+        status: nextStatus
+      });
+      setStatus(res.data?.message || `${record.students?.name || 'Student'} marked as ${nextStatus}.`);
+      await fetchReports(filters);
+    } catch (err: any) {
+      const backendError = err.response?.data;
+      setStatus([backendError?.error, backendError?.details, backendError?.message].filter(Boolean).join(' - ') || `Failed to mark ${record.students?.name || 'student'} as ${nextStatus}.`);
     } finally {
       setActionKey(null);
     }
@@ -289,10 +330,11 @@ const AdminReports: React.FC = () => {
 
       {(error || status) && <div className={`rounded-xl border px-4 py-3 text-sm ${error ? 'border-red-200 bg-red-50 text-red-700' : 'border-blue-200 bg-blue-50 text-blue-800'}`}>{error || status}</div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4">
         <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-green-500"><div className="flex items-center gap-3"><CheckCircle className="text-green-600" /><div><p className="text-sm text-gray-500 font-medium">Present Records</p><p className="text-2xl font-bold mt-1">{stats.present}</p></div></div></div>
         <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-red-500"><div className="flex items-center gap-3"><AlertCircle className="text-red-600" /><div><p className="text-sm text-gray-500 font-medium">Absent Records</p><p className="text-2xl font-bold mt-1">{stats.absent}</p></div></div></div>
         <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-amber-500"><div className="flex items-center gap-3"><AlertCircle className="text-amber-600" /><div><p className="text-sm text-gray-500 font-medium">Late Records</p><p className="text-2xl font-bold mt-1">{stats.late}</p></div></div></div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-sky-500"><div className="flex items-center gap-3"><UserCheck className="text-sky-600" /><div><p className="text-sm text-gray-500 font-medium">On Duty Records</p><p className="text-2xl font-bold mt-1">{stats.onDuty}</p></div></div></div>
         <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-violet-500"><div className="flex items-center gap-3"><ShieldAlert className="text-violet-600" /><div><p className="text-sm text-gray-500 font-medium">Pending Reviews</p><p className="text-2xl font-bold mt-1">{stats.pendingReviews}</p></div></div></div>
         <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-blue-500"><div className="flex items-center gap-3"><Calendar className="text-blue-600" /><div><p className="text-sm text-gray-500 font-medium">Filtered Records</p><p className="text-2xl font-bold mt-1">{stats.total}</p></div></div></div>
       </div>
@@ -376,7 +418,29 @@ const AdminReports: React.FC = () => {
                   <td className="p-4 text-gray-600">{record.students?.semester || 'N/A'}</td>
                   <td className="p-4 text-gray-500">{new Date(record.timestamp).toLocaleDateString()}<br />{new Date(record.timestamp).toLocaleTimeString()}</td>
                   <td className="p-4 text-gray-600">{record.period || record.sessions?.subject || 'General'}</td>
-                  <td className="p-4"><span className={`px-2 py-1 rounded-full text-xs font-bold ${record.status === 'Present' ? 'bg-green-100 text-green-700' : record.status === 'Late' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{record.status}</span></td>
+                  <td className="p-4">
+                    <div className="flex flex-col items-start gap-2">
+                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${STATUS_BADGE_CLASSES[record.status] || 'bg-gray-100 text-gray-700'}`}>{record.status}</span>
+                      {(record.status === 'Absent' || record.status === 'On Duty') && record.period ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleOnDutyStatus(record)}
+                          disabled={actionKey === `status-${record.id}`}
+                          className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-semibold transition disabled:opacity-50 ${
+                            record.status === 'Absent'
+                              ? 'bg-sky-50 text-sky-700 hover:bg-sky-100'
+                              : 'bg-red-50 text-red-700 hover:bg-red-100'
+                          }`}
+                        >
+                          {actionKey === `status-${record.id}`
+                            ? 'Saving...'
+                            : record.status === 'Absent'
+                              ? 'Mark On Duty'
+                              : 'Mark Absent'}
+                        </button>
+                      ) : null}
+                    </div>
+                  </td>
                   <td className="p-4 text-gray-600">{formatSource(record.source)}</td>
                   <td className="p-4 text-gray-600">{formatConfidence(record.confidence)}</td>
                   <td className="p-4 text-gray-500 max-w-[220px] whitespace-pre-wrap">{record.notes || '—'}</td>
