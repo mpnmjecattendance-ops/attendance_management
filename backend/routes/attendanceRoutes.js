@@ -1,9 +1,21 @@
 import express from 'express';
 import { supabase } from '../utils/supabaseClient.js';
-import { createLocalTimestamp, formatLocalDate, getLocalDateBounds } from '../services/attendanceSettingsService.js';
+import {
+    ATTENDANCE_PERIODS,
+    createLocalTimestamp,
+    formatLocalDate,
+    getAttendanceSettings,
+    getCompletedAttendancePeriods,
+    getLocalDateBounds,
+    getLocalDayOfWeek
+} from '../services/attendanceSettingsService.js';
 import { syncAbsencesForToday } from '../services/attendanceSyncService.js';
+import { getHolidays } from '../services/calendarService.js';
+import { REVIEW_STATUS } from '../services/reviewService.js';
 
 const router = express.Router();
+const STUDENT_SELECT = 'id, name, register_number, dob, blood_group, address, year, semester, department_id, is_active, created_at';
+const STUDENT_SELECT_FALLBACK = 'id, name, register_number, dob, blood_group, address, year, semester, department_id, created_at';
 
 const getPeriodTimestamp = (date, period) => {
     if ((period || '').toLowerCase() === 'morning') {
@@ -15,6 +27,103 @@ const getPeriodTimestamp = (date, period) => {
     }
 
     return createLocalTimestamp(date, '12:00:00');
+};
+
+const applyStudentFilters = (query, {
+    studentId = null,
+    departmentId = null,
+    parsedYear = null,
+    parsedSemester = null
+}) => {
+    let nextQuery = query;
+
+    if (studentId) {
+        nextQuery = nextQuery.eq('id', studentId);
+    }
+
+    if (departmentId) {
+        nextQuery = nextQuery.eq('department_id', departmentId);
+    }
+
+    if (parsedYear) {
+        nextQuery = nextQuery.eq('year', parsedYear);
+    }
+
+    if (parsedSemester) {
+        nextQuery = nextQuery.eq('semester', parsedSemester);
+    }
+
+    return nextQuery;
+};
+
+const fetchFilteredStudents = async (filters, { activeOnly = false } = {}) => {
+    let query = applyStudentFilters(
+        supabase
+            .from('students')
+            .select(STUDENT_SELECT)
+            .order('name', { ascending: true }),
+        filters
+    );
+
+    if (activeOnly) {
+        query = query.eq('is_active', true);
+    }
+
+    let { data, error } = await query;
+
+    if (error?.message?.includes('is_active')) {
+        let fallbackQuery = applyStudentFilters(
+            supabase
+                .from('students')
+                .select(STUDENT_SELECT_FALLBACK)
+                .order('name', { ascending: true }),
+            filters
+        );
+
+        ({ data, error } = await fallbackQuery);
+
+        if (!error) {
+            data = (data || []).map((student) => ({ ...student, is_active: true }));
+        }
+    }
+
+    if (error) {
+        throw new Error(error.message);
+    }
+
+    return data || [];
+};
+
+const getDateRange = (fromDate, toDate) => {
+    const dates = [];
+    const cursor = new Date(`${fromDate}T12:00:00.000Z`);
+    const end = new Date(`${toDate}T12:00:00.000Z`);
+
+    while (cursor <= end) {
+        dates.push(cursor.toISOString().slice(0, 10));
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    return dates;
+};
+
+const buildAttendanceKey = (studentId, date, period) => `${studentId}::${date}::${period}`;
+
+const getCompletedPeriodsForDate = ({ date, today, now, settings, holidayDates }) => {
+    if (date > today || holidayDates.has(date)) {
+        return [];
+    }
+
+    const dayOfWeek = getLocalDayOfWeek(new Date(createLocalTimestamp(date, '12:00:00')));
+    if (dayOfWeek === 0) {
+        return [];
+    }
+
+    if (date < today) {
+        return ATTENDANCE_PERIODS.map(({ period }) => period);
+    }
+
+    return getCompletedAttendancePeriods(settings, now);
 };
 
 router.get('/report', async (req, res) => {
@@ -31,7 +140,8 @@ router.get('/report', async (req, res) => {
         const requestedDate = typeof date === 'string' ? date : null;
         const normalizedFromDate = typeof fromDate === 'string' ? fromDate : requestedDate;
         const normalizedToDate = typeof toDate === 'string' ? toDate : requestedDate;
-        const today = formatLocalDate();
+        const reportNow = new Date();
+        const today = formatLocalDate(reportNow);
         const shouldSyncToday = (!normalizedFromDate && !normalizedToDate) ||
             (
                 (!normalizedFromDate || normalizedFromDate <= today) &&
@@ -58,40 +168,25 @@ router.get('/report', async (req, res) => {
         }
 
         let filteredStudentIds = null;
+        let synthStudents = [];
         const hasStudentFilters = Boolean(studentId || departmentId || parsedYear || parsedSemester);
+        const studentFilters = {
+            studentId,
+            departmentId,
+            parsedYear,
+            parsedSemester
+        };
 
         if (hasStudentFilters) {
-            let studentQuery = supabase
-                .from('students')
-                .select('id');
-
-            if (studentId) {
-                studentQuery = studentQuery.eq('id', studentId);
-            }
-
-            if (departmentId) {
-                studentQuery = studentQuery.eq('department_id', departmentId);
-            }
-
-            if (parsedYear) {
-                studentQuery = studentQuery.eq('year', parsedYear);
-            }
-
-            if (parsedSemester) {
-                studentQuery = studentQuery.eq('semester', parsedSemester);
-            }
-
-            const { data: matchingStudents, error: studentFilterError } = await studentQuery;
-
-            if (studentFilterError) {
-                return res.status(400).json({ error: studentFilterError.message });
-            }
-
+            const matchingStudents = await fetchFilteredStudents(studentFilters);
             filteredStudentIds = (matchingStudents || []).map((student) => student.id);
+            synthStudents = (matchingStudents || []).filter((student) => student.is_active !== false);
 
             if (filteredStudentIds.length === 0) {
                 return res.json({ report: [] });
             }
+        } else {
+            synthStudents = await fetchFilteredStudents(studentFilters, { activeOnly: true });
         }
 
         let query = supabase
@@ -120,8 +215,99 @@ router.get('/report', async (req, res) => {
             return res.status(400).json({ error: error.message });
         }
 
-        const studentIds = [...new Set((attendanceRecords || []).map((record) => record.student_id).filter(Boolean))];
-        const sessionIds = [...new Set((attendanceRecords || []).map((record) => record.session_id).filter(Boolean))];
+        const effectiveFromDate = normalizedFromDate || today;
+        const effectiveToDate = normalizedToDate || today;
+        const settings = await getAttendanceSettings();
+        const holidayDates = new Set(
+            (await getHolidays({ fromDate: effectiveFromDate, toDate: effectiveToDate }))
+                .filter((holiday) => holiday.is_holiday)
+                .map((holiday) => holiday.date)
+        );
+        const existingAttendanceKeys = new Set(
+            (attendanceRecords || [])
+                .filter((record) => record.student_id && record.period)
+                .map((record) => buildAttendanceKey(
+                    record.student_id,
+                    formatLocalDate(new Date(record.timestamp)),
+                    record.period
+                ))
+        );
+        const pendingReviewKeys = new Set();
+        const synthStudentIds = synthStudents.map((student) => student.id).filter(Boolean);
+
+        if (synthStudentIds.length > 0) {
+            const { start: reviewStart } = getLocalDateBounds(effectiveFromDate);
+            const { end: reviewEnd } = getLocalDateBounds(effectiveToDate);
+            const { data: pendingReviews, error: pendingReviewsError } = await supabase
+                .from('recognition_reviews')
+                .select('candidate_student_id, period, created_at')
+                .eq('status', REVIEW_STATUS.PENDING)
+                .in('candidate_student_id', synthStudentIds)
+                .gte('created_at', reviewStart.toISOString())
+                .lte('created_at', reviewEnd.toISOString());
+
+            if (pendingReviewsError && !pendingReviewsError.message?.includes('recognition_reviews')) {
+                return res.status(400).json({ error: pendingReviewsError.message });
+            }
+
+            for (const review of pendingReviews || []) {
+                if (!review.candidate_student_id || !review.period) {
+                    continue;
+                }
+
+                pendingReviewKeys.add(buildAttendanceKey(
+                    review.candidate_student_id,
+                    formatLocalDate(new Date(review.created_at)),
+                    review.period
+                ));
+            }
+        }
+
+        const derivedAbsences = [];
+        for (const reportDate of getDateRange(effectiveFromDate, effectiveToDate)) {
+            const completedPeriods = getCompletedPeriodsForDate({
+                date: reportDate,
+                today,
+                now: reportNow,
+                settings,
+                holidayDates
+            });
+
+            for (const period of completedPeriods) {
+                for (const student of synthStudents) {
+                    const studentCreatedDate = student.created_at ? formatLocalDate(new Date(student.created_at)) : null;
+                    if (studentCreatedDate && reportDate < studentCreatedDate) {
+                        continue;
+                    }
+
+                    const attendanceKey = buildAttendanceKey(student.id, reportDate, period);
+
+                    if (existingAttendanceKeys.has(attendanceKey) || pendingReviewKeys.has(attendanceKey)) {
+                        continue;
+                    }
+
+                    derivedAbsences.push({
+                        id: `derived-${student.id}-${reportDate}-${period.toLowerCase()}`,
+                        student_id: student.id,
+                        session_id: null,
+                        status: 'Absent',
+                        period,
+                        timestamp: getPeriodTimestamp(reportDate, period),
+                        marked_by: null,
+                        source: 'auto_absent',
+                        confidence: null,
+                        review_id: null,
+                        notes: 'Attendance was not recorded for this completed period.',
+                        is_derived: true
+                    });
+                    existingAttendanceKeys.add(attendanceKey);
+                }
+            }
+        }
+
+        const reportRows = [...(attendanceRecords || []), ...derivedAbsences];
+        const studentIds = [...new Set(reportRows.map((record) => record.student_id).filter(Boolean))];
+        const sessionIds = [...new Set(reportRows.map((record) => record.session_id).filter(Boolean))];
         const studentsById = new Map();
         const sessionsById = new Map();
 
@@ -176,11 +362,13 @@ router.get('/report', async (req, res) => {
             }
         }
 
-        const report = (attendanceRecords || []).map((record) => ({
-            ...record,
-            students: studentsById.get(record.student_id) || null,
-            sessions: record.session_id ? sessionsById.get(record.session_id) || null : null
-        }));
+        const report = reportRows
+            .map((record) => ({
+                ...record,
+                students: studentsById.get(record.student_id) || null,
+                sessions: record.session_id ? sessionsById.get(record.session_id) || null : null
+            }))
+            .sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime());
 
         res.json({ report });
     } catch (error) {

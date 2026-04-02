@@ -1,5 +1,6 @@
 import { supabase } from '../utils/supabaseClient.js';
 import {
+    createLocalTimestamp,
     formatLocalDate,
     getLocalDayOfWeek,
     getAttendanceSettings,
@@ -64,6 +65,7 @@ export const syncAbsencesForToday = async (now = new Date()) => {
     }
 
     let inserted = 0;
+    const currentDate = formatLocalDate(now);
 
     for (const period of completedPeriods) {
         const { data: existingAttendance, error: attendanceError } = await supabase
@@ -104,7 +106,7 @@ export const syncAbsencesForToday = async (now = new Date()) => {
                 status: 'Absent',
                 period,
                 source: 'auto_absent',
-                timestamp: new Date().toISOString()
+                timestamp: createLocalTimestamp(currentDate, period === 'Morning' ? '09:00:00' : '16:00:00')
             }));
 
         if (missingStudents.length === 0) {
